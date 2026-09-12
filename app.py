@@ -7,6 +7,7 @@ Streamlit-приложение для автоматического обнар�
 """
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Dict
@@ -21,6 +22,19 @@ from detector import (
     RoboflowEmptyResponseError,
     RoboflowNetworkError,
 )
+from report import generate_pdf_report
+
+# ---------------------------------------------------------------------------
+# API-ключ Roboflow.
+#
+# Ключ зашит в код по умолчанию, чтобы приложение работало "из коробки" без
+# необходимости вводить что-либо в интерфейсе — он нигде не отображается в UI.
+# Переменная окружения ROBOFLOW_API_KEY (если задана на сервере/в Railway) имеет
+# приоритет над значением по умолчанию — это позволяет заменить ключ при
+# деплое, не редактируя код и не публикуя реальный ключ в открытом репозитории.
+# ---------------------------------------------------------------------------
+_DEFAULT_API_KEY = "Z1QEDPvGPkNLNYEDRRN6"
+API_KEY = os.environ.get("ROBOFLOW_API_KEY", _DEFAULT_API_KEY)
 
 st.set_page_config(
     page_title="Детектор дефектов бетонных конструкций",
@@ -32,17 +46,105 @@ if "analysis_done" not in st.session_state:
     st.session_state["analysis_done"] = False
 
 # ---------------------------------------------------------------------------
+# Оформление
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+        html, body, [class*="css"]  {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .block-container {
+            padding-top: 1.6rem;
+            max-width: 1180px;
+        }
+
+        /* --- Hero-заголовок ------------------------------------------- */
+        .hero {
+            background: linear-gradient(120deg, #1E3A8A 0%, #2563EB 55%, #3B82F6 100%);
+            border-radius: 18px;
+            padding: 2.1rem 2.4rem;
+            margin-bottom: 1.6rem;
+            box-shadow: 0 10px 30px -12px rgba(37, 99, 235, 0.45);
+        }
+        .hero h1 {
+            color: #FFFFFF;
+            font-weight: 800;
+            font-size: 2rem;
+            margin: 0 0 0.5rem 0;
+        }
+        .hero p {
+            color: #DBEAFE;
+            font-size: 1.02rem;
+            margin: 0;
+            max-width: 720px;
+        }
+
+        /* --- Карточки метрик -------------------------------------------- */
+        div[data-testid="stMetric"] {
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 14px;
+            padding: 0.9rem 1.1rem 0.7rem 1.1rem;
+            box-shadow: 0 4px 14px -8px rgba(15, 23, 42, 0.12);
+        }
+        div[data-testid="stMetricLabel"] {
+            color: #64748B;
+        }
+        div[data-testid="stMetricValue"] {
+            color: #1E3A8A;
+            font-weight: 700;
+        }
+
+        /* --- Кнопки ------------------------------------------------------ */
+        .stButton > button, .stDownloadButton > button {
+            border-radius: 10px;
+            font-weight: 600;
+            border: none;
+        }
+        .stButton > button[kind="primary"], .stButton > button {
+            background: linear-gradient(120deg, #2563EB, #1E3A8A);
+            color: #FFFFFF;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+            filter: brightness(1.08);
+        }
+
+        /* --- Секции результатов ------------------------------------------ */
+        .section-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #1E3A8A;
+            margin: 1.6rem 0 0.6rem 0;
+            padding-bottom: 0.35rem;
+            border-bottom: 2px solid #DBEAFE;
+        }
+
+        /* --- Боковая панель ----------------------------------------------- */
+        section[data-testid="stSidebar"] {
+            background: #F8FAFC;
+        }
+        section[data-testid="stSidebar"] h2 {
+            color: #1E3A8A;
+        }
+
+        div[data-testid="stExpander"] {
+            border: 1px solid #E2E8F0;
+            border-radius: 10px;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------------------------------------------------------------------------
 # Боковая панель
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Настройки")
-
-    api_key = st.text_input(
-        "API-ключ Roboflow",
-        type="password",
-        placeholder="Введите ваш API-ключ",
-        help="Ключ используется только в рамках текущей сессии и никуда не сохраняется.",
-    )
 
     model_id = st.text_input(
         "ID модели Roboflow",
@@ -91,23 +193,26 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown(
-        "**Где взять API-ключ?**\n\n"
-        "1. Зарегистрируйтесь на [Roboflow](https://roboflow.com).\n"
-        "2. Откройте настройки рабочей области (Workspace Settings).\n"
-        "3. Скопируйте значение **Private API Key** во вкладке *Roboflow API*.\n"
-        "4. Готовую модель детекции дефектов можно найти в "
-        "[Roboflow Universe](https://universe.roboflow.com), либо использовать свою."
+    st.caption(
+        "🔒 Подключение к Roboflow уже настроено — вводить API-ключ не нужно. "
+        "Готовую модель детекции дефектов можно найти в "
+        "[Roboflow Universe](https://universe.roboflow.com), либо указать свою "
+        "выше."
     )
 
 # ---------------------------------------------------------------------------
-# Основная область — заголовок и загрузка файла
+# Основная область — hero-заголовок и загрузка файла
 # ---------------------------------------------------------------------------
-st.title("🏗️ Автоматическое обнаружение дефектов конструкций")
 st.markdown(
-    "Загрузите фотографию бетонной конструкции — сервис автоматически найдёт "
-    "**трещины, сколы, высолы и раковины**, используя предобученную ИИ-модель "
-    "на базе Roboflow Inference API."
+    """
+    <div class="hero">
+        <h1>🏗️ Автоматическое обнаружение дефектов конструкций</h1>
+        <p>Загрузите фотографию бетонной конструкции — сервис автоматически
+        найдёт трещины, сколы, высолы и раковины, используя предобученную
+        ИИ-модель на базе Roboflow Inference API.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 uploaded_file = st.file_uploader(
@@ -118,25 +223,21 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     st.image(uploaded_file, caption="Загруженное изображение", width=400)
 
-run_disabled = not api_key or uploaded_file is None
+run_disabled = uploaded_file is None
 run_button = st.button(
     "🔍 Запустить анализ",
     disabled=run_disabled,
     use_container_width=True,
+    type="primary",
 )
 
 if run_disabled:
-    if uploaded_file is None and not api_key:
-        st.info("Введите API-ключ и загрузите фотографию, чтобы начать анализ.")
-    elif uploaded_file is None:
-        st.info("Загрузите фотографию конструкции, чтобы начать анализ.")
-    else:
-        st.info("Введите API-ключ Roboflow в боковой панели, чтобы активировать анализ.")
+    st.info("Загрузите фотографию конструкции, чтобы начать анализ.")
 
 # ---------------------------------------------------------------------------
 # Запуск анализа
 # ---------------------------------------------------------------------------
-if run_button and uploaded_file is not None and api_key:
+if run_button and uploaded_file is not None:
     with st.spinner("Анализируем изображение, пожалуйста подождите..."):
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
@@ -146,7 +247,7 @@ if run_button and uploaded_file is not None and api_key:
                 with open(input_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
-                detector = RoboflowDetector(api_key=api_key, model_id=model_id)
+                detector = RoboflowDetector(api_key=API_KEY, model_id=model_id)
                 results: Dict[str, Any] = detector.detect(
                     image_path=input_path,
                     confidence=confidence_threshold,
@@ -170,6 +271,16 @@ if run_button and uploaded_file is not None and api_key:
                 st.session_state["original_image"] = original_image
                 st.session_state["annotated_image"] = annotated_image.copy()
                 st.session_state["analysis_done"] = True
+                # Снимок параметров, использованных именно в этом запуске —
+                # нужен для PDF-отчёта, даже если пользователь потом подвинет
+                # ползунки в сайдбаре.
+                st.session_state["run_params"] = {
+                    "model_id": model_id,
+                    "confidence_threshold": confidence_threshold,
+                    "overlap_threshold": overlap_threshold,
+                    "opacity_threshold": opacity_threshold,
+                    "source_filename": uploaded_file.name,
+                }
 
             st.success("✅ Анализ успешно завершён.")
 
@@ -194,8 +305,9 @@ if run_button and uploaded_file is not None and api_key:
 # ---------------------------------------------------------------------------
 if st.session_state.get("analysis_done"):
     results = st.session_state["results"]
-    st.markdown("---")
-    st.subheader("📊 Результаты анализа")
+    run_params = st.session_state.get("run_params", {})
+
+    st.markdown('<div class="section-title">📊 Результаты анализа</div>', unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -218,13 +330,15 @@ if st.session_state.get("analysis_done"):
     if total_defects == 0:
         st.success("✅ Явных дефектов не обнаружено при заданном пороге уверенности.")
     else:
-        st.markdown("### 🔎 Детализация по каждому дефекту")
+        st.markdown('<div class="section-title">🔎 Детализация по каждому дефекту</div>', unsafe_allow_html=True)
         for i, defect in enumerate(results["defects"], start=1):
             with st.expander(
                 f"Дефект №{i}: {defect['class']} "
                 f"(уверенность {defect['confidence']:.0%})"
             ):
                 st.json(defect)
+
+    st.markdown('<div class="section-title">⬇️ Скачать результаты</div>', unsafe_allow_html=True)
 
     json_payload = {
         "total_defects": results["total_defects"],
@@ -233,10 +347,29 @@ if st.session_state.get("analysis_done"):
     }
     json_bytes = json.dumps(json_payload, ensure_ascii=False, indent=2).encode("utf-8")
 
-    st.download_button(
-        label="⬇️ Скачать результаты (JSON)",
-        data=json_bytes,
-        file_name="defect_analysis_results.json",
-        mime="application/json",
-        use_container_width=True,
-    )
+    download_col1, download_col2 = st.columns(2)
+    with download_col1:
+        st.download_button(
+            label="🧾 Скачать отчёт (PDF)",
+            data=generate_pdf_report(
+                results=results,
+                original_image=st.session_state["original_image"],
+                annotated_image=st.session_state["annotated_image"],
+                model_id=run_params.get("model_id", model_id),
+                confidence_threshold=run_params.get("confidence_threshold", confidence_threshold),
+                overlap_threshold=run_params.get("overlap_threshold", overlap_threshold),
+                opacity_threshold=run_params.get("opacity_threshold", opacity_threshold),
+                source_filename=run_params.get("source_filename", "photo"),
+            ),
+            file_name="defect_analysis_report.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+    with download_col2:
+        st.download_button(
+            label="🗂️ Скачать результаты (JSON)",
+            data=json_bytes,
+            file_name="defect_analysis_results.json",
+            mime="application/json",
+            use_container_width=True,
+        )
