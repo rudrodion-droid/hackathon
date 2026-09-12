@@ -10,7 +10,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import streamlit as st
 from PIL import Image
@@ -22,6 +22,7 @@ from detector import (
     RoboflowEmptyResponseError,
     RoboflowNetworkError,
 )
+from ensemble_detector import DEFAULT_REGISTRY, EnsembleDetector, ModelSpec
 from report import generate_pdf_report
 
 # ---------------------------------------------------------------------------
@@ -75,24 +76,92 @@ st.markdown(
 with st.sidebar:
     st.header("⚙️ Настройки")
 
-    model_id = st.text_input(
-        "ID модели Roboflow",
-        value=DEFAULT_MODEL_ID,
-        help="Формат: project-slug/version. Можно заменить на свою модель.",
+    analysis_mode = st.radio(
+        "Режим анализа",
+        options=["Одна модель", "Ансамбль нескольких моделей"],
+        help=(
+            "«Ансамбль» параллельно прогоняет фото через несколько моделей — "
+            "каждая отвечает за свой тип дефекта — и объединяет результаты, "
+            "убирая дубли между моделями."
+        ),
     )
+    ensemble_mode = analysis_mode == "Ансамбль нескольких моделей"
 
-    with st.expander("Пороги детекции", expanded=True):
-        confidence_threshold = st.slider(
-            "Confidence Threshold",
+    if not ensemble_mode:
+        model_id = st.text_input(
+            "ID модели Roboflow",
+            value=DEFAULT_MODEL_ID,
+            help="Формат: project-slug/version. Можно заменить на свою модель.",
+        )
+    else:
+        model_id = DEFAULT_MODEL_ID  # используется только как фолбэк для подписи отчёта
+        st.caption(
+            "⚙️ Набор моделей фиксирован — каждая отвечает за свой тип "
+            "дефекта. Можно включать/отключать модели и настраивать их "
+            "confidence, но не менять сам список моделей."
+        )
+
+        ensemble_selection: List[ModelSpec] = []
+        for spec in DEFAULT_REGISTRY:
+            col_check, col_conf = st.columns([2.2, 1])
+            with col_check:
+                is_enabled = st.checkbox(
+                    f"**{spec.name}**  \n`{spec.model_id}`",
+                    value=spec.enabled,
+                    key=f"ensemble_enabled__{spec.model_id}",
+                )
+            with col_conf:
+                model_confidence = st.number_input(
+                    "Confidence",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=spec.confidence,
+                    step=0.05,
+                    key=f"ensemble_conf__{spec.model_id}",
+                    disabled=not is_enabled,
+                )
+            ensemble_selection.append(
+                ModelSpec(
+                    name=spec.name,
+                    model_id=spec.model_id,
+                    responsible_classes=spec.responsible_classes,
+                    confidence=model_confidence,
+                    enabled=is_enabled,
+                )
+            )
+
+        cross_model_iou = st.slider(
+            "IoU для объединения между моделями",
             min_value=0.0,
             max_value=1.0,
             value=0.5,
             step=0.05,
             help=(
-                "Дефекты с уверенностью модели ниже этого значения не будут "
-                "учитываться. Передаётся напрямую в Roboflow API."
+                "Если рамки от разных моделей пересекаются сильнее этого "
+                "значения — считаем, что это один и тот же дефект, и "
+                "оставляем только более уверенное предсказание."
             ),
         )
+
+    with st.expander("Пороги детекции", expanded=True):
+        if ensemble_mode:
+            confidence_threshold = None
+            st.caption(
+                "Confidence Threshold задаётся отдельно для каждой модели "
+                "в таблице ансамбля выше."
+            )
+        else:
+            confidence_threshold = st.slider(
+                "Confidence Threshold",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.5,
+                step=0.05,
+                help=(
+                    "Дефекты с уверенностью модели ниже этого значения не будут "
+                    "учитываться. Передаётся напрямую в Roboflow API."
+                ),
+            )
         overlap_threshold = st.slider(
             "Overlap Threshold",
             min_value=0.0,
@@ -147,15 +216,20 @@ with upload_col:
         "Загрузите фото конструкции",
         type=["jpg", "jpeg", "png"],
     )
-    run_disabled = uploaded_file is None
+    no_models_enabled = ensemble_mode and not any(
+        spec.enabled for spec in ensemble_selection
+    )
+    run_disabled = uploaded_file is None or no_models_enabled
     run_button = st.button(
         "🔍 Запустить анализ",
         disabled=run_disabled,
         use_container_width=True,
         type="primary",
     )
-    if run_disabled:
+    if uploaded_file is None:
         st.info("Загрузите фотографию конструкции, чтобы начать анализ.")
+    elif no_models_enabled:
+        st.info("Включите хотя бы одну модель ансамбля в сайдбаре.")
 
 with preview_col:
     if uploaded_file is not None:
@@ -174,12 +248,25 @@ if run_button and uploaded_file is not None:
                 with open(input_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
-                detector = RoboflowDetector(api_key=API_KEY, model_id=model_id)
-                results: Dict[str, Any] = detector.detect(
-                    image_path=input_path,
-                    confidence=confidence_threshold,
-                    overlap=overlap_threshold,
-                )
+                if ensemble_mode:
+                    detector = EnsembleDetector(api_key=API_KEY, registry=ensemble_selection)
+                    results: Dict[str, Any] = detector.detect(
+                        image_path=input_path,
+                        overlap=overlap_threshold,
+                        cross_model_iou=cross_model_iou,
+                    )
+                    model_id_for_report = " + ".join(
+                        spec.model_id for spec in ensemble_selection if spec.enabled
+                    )
+                else:
+                    detector = RoboflowDetector(api_key=API_KEY, model_id=model_id)
+                    results = detector.detect(
+                        image_path=input_path,
+                        confidence=confidence_threshold,
+                        overlap=overlap_threshold,
+                    )
+                    model_id_for_report = model_id
+
                 annotated_image = detector.visualize(
                     image_path=input_path,
                     results=results,
@@ -202,14 +289,23 @@ if run_button and uploaded_file is not None:
                 # нужен для PDF-отчёта, даже если пользователь потом подвинет
                 # ползунки в сайдбаре.
                 st.session_state["run_params"] = {
-                    "model_id": model_id,
-                    "confidence_threshold": confidence_threshold,
+                    "model_id": model_id_for_report,
+                    "confidence_threshold": confidence_threshold if confidence_threshold is not None else "см. ансамбль",
                     "overlap_threshold": overlap_threshold,
                     "opacity_threshold": opacity_threshold,
                     "source_filename": uploaded_file.name,
                 }
 
             st.success("✅ Анализ успешно завершён.")
+            model_status = results.get("model_status")
+            if model_status:
+                failed = [name for name, s in model_status.items() if s["status"] == "error"]
+                if failed:
+                    st.warning(
+                        "⚠️ Не удалось получить ответ от моделей: "
+                        + ", ".join(failed)
+                        + ". Результат построен по остальным моделям ансамбля."
+                    )
 
         except RoboflowAuthError as exc:
             st.session_state["analysis_done"] = False
@@ -257,6 +353,22 @@ if st.session_state.get("analysis_done"):
         st.metric("Трещины", cracks_count)
     with metric_col3.container(border=True):
         st.metric("Сколы / прочее", other_count)
+
+    model_status = results.get("model_status")
+    if model_status:
+        with st.expander("🧩 Статус моделей ансамбля"):
+            for name, status in model_status.items():
+                if status["status"] == "ok":
+                    st.markdown(
+                        f"✅ **{name}** (`{status['model_id']}`) — найдено "
+                        f"{status['raw_count']}, учтено после фильтра по "
+                        f"классу: {status['used_count']}"
+                    )
+                else:
+                    st.markdown(
+                        f"❌ **{name}** (`{status['model_id']}`) — ошибка: "
+                        f"{status['error']}"
+                    )
 
     if total_defects == 0:
         st.success("✅ Явных дефектов не обнаружено при заданном пороге уверенности.")

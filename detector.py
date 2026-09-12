@@ -128,6 +128,89 @@ class RoboflowEmptyResponseError(RoboflowDetectorError):
     """API вернул пустой или некорректно сформированный ответ."""
 
 
+def render_annotated_image(
+    image_path: str,
+    defects: List["DetectionResult"],
+    output_path: Optional[str] = None,
+    opacity: float = 0.75,
+) -> Image.Image:
+    """
+    Отрисовывает bounding box'ы дефектов поверх исходного изображения.
+
+    Вынесена из RoboflowDetector.visualize() в отдельную функцию, не
+    привязанную к конкретному клиенту/модели, чтобы её могли использовать
+    как одиночный детектор (RoboflowDetector), так и ансамбль нескольких
+    моделей (EnsembleDetector) — им обоим нужна одна и та же отрисовка по
+    уже готовому списку DetectionResult, независимо от того, какая именно
+    модель (или модели) их нашли.
+
+    Args:
+        image_path: Путь к исходному изображению.
+        defects: Список найденных дефектов (DetectionResult).
+        output_path: Если указан, итоговое изображение сохраняется по этому пути.
+        opacity: Непрозрачность заливки внутри рамок (0.0-1.0).
+
+    Returns:
+        Изображение в формате Pillow (RGB) с отрисованными дефектами.
+
+    Raises:
+        RoboflowDetectorError: если изображение не удалось прочитать.
+    """
+    try:
+        pil_image = Image.open(image_path).convert("RGB")
+    except Exception as exc:
+        raise RoboflowDetectorError(
+            f"Не удалось прочитать изображение для визуализации: {exc}"
+        ) from exc
+
+    font = _load_font(size=16)
+
+    # Полупрозрачная заливка рисуется на отдельном RGBA-слое и затем
+    # накладывается на исходное изображение — так можно регулировать
+    # непрозрачность (opacity), не теряя резкость обводки и подписей.
+    opacity = max(0.0, min(1.0, opacity))
+    fill_alpha = int(round(opacity * 255))
+    overlay = Image.new("RGBA", pil_image.size, (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+
+    for defect in defects:
+        x1, y1, x2, y2 = defect.to_bbox_xyxy()
+        color_rgb = CLASS_COLOR_RGB.get(defect.class_name_ru, DEFAULT_COLOR_RGB)
+        overlay_draw.rectangle(
+            [x1, y1, x2, y2], fill=(*color_rgb, fill_alpha)
+        )
+
+    pil_image = Image.alpha_composite(
+        pil_image.convert("RGBA"), overlay
+    ).convert("RGB")
+    draw = ImageDraw.Draw(pil_image)
+
+    for defect in defects:
+        x1, y1, x2, y2 = defect.to_bbox_xyxy()
+        color_rgb = CLASS_COLOR_RGB.get(defect.class_name_ru, DEFAULT_COLOR_RGB)
+        label = f"{defect.class_name_ru} {defect.confidence:.0%}"
+
+        # Рамка вокруг дефекта (поверх полупрозрачной заливки).
+        draw.rectangle([x1, y1, x2, y2], outline=color_rgb, width=2)
+
+        # Подпись с фоном-плашкой поверх верхней границы рамки.
+        text_bbox = draw.textbbox((0, 0), label, font=font)
+        text_w = text_bbox[2] - text_bbox[0]
+        text_h = text_bbox[3] - text_bbox[1]
+
+        label_y = max(0, y1 - text_h - 6)
+        draw.rectangle(
+            [x1, label_y, x1 + text_w + 6, label_y + text_h + 6],
+            fill=color_rgb,
+        )
+        draw.text((x1 + 3, label_y + 2), label, fill=(0, 0, 0), font=font)
+
+    if output_path:
+        pil_image.save(output_path)
+
+    return pil_image
+
+
 class RoboflowDetector:
     """
     Обёртка над Roboflow Inference API для детекции дефектов бетонных
@@ -308,57 +391,10 @@ class RoboflowDetector:
         Raises:
             RoboflowDetectorError: если изображение не удалось прочитать.
         """
-        try:
-            pil_image = Image.open(image_path).convert("RGB")
-        except Exception as exc:
-            raise RoboflowDetectorError(
-                f"Не удалось прочитать изображение для визуализации: {exc}"
-            ) from exc
-
         defects: List[DetectionResult] = results.get("_defect_objects", [])
-        font = _load_font(size=16)
-
-        # Полупрозрачная заливка рисуется на отдельном RGBA-слое и затем
-        # накладывается на исходное изображение — так можно регулировать
-        # непрозрачность (opacity), не теряя резкость обводки и подписей.
-        opacity = max(0.0, min(1.0, opacity))
-        fill_alpha = int(round(opacity * 255))
-        overlay = Image.new("RGBA", pil_image.size, (0, 0, 0, 0))
-        overlay_draw = ImageDraw.Draw(overlay)
-
-        for defect in defects:
-            x1, y1, x2, y2 = defect.to_bbox_xyxy()
-            color_rgb = CLASS_COLOR_RGB.get(defect.class_name_ru, DEFAULT_COLOR_RGB)
-            overlay_draw.rectangle(
-                [x1, y1, x2, y2], fill=(*color_rgb, fill_alpha)
-            )
-
-        pil_image = Image.alpha_composite(
-            pil_image.convert("RGBA"), overlay
-        ).convert("RGB")
-        draw = ImageDraw.Draw(pil_image)
-
-        for defect in defects:
-            x1, y1, x2, y2 = defect.to_bbox_xyxy()
-            color_rgb = CLASS_COLOR_RGB.get(defect.class_name_ru, DEFAULT_COLOR_RGB)
-            label = f"{defect.class_name_ru} {defect.confidence:.0%}"
-
-            # Рамка вокруг дефекта (поверх полупрозрачной заливки).
-            draw.rectangle([x1, y1, x2, y2], outline=color_rgb, width=2)
-
-            # Подпись с фоном-плашкой поверх верхней границы рамки.
-            text_bbox = draw.textbbox((0, 0), label, font=font)
-            text_w = text_bbox[2] - text_bbox[0]
-            text_h = text_bbox[3] - text_bbox[1]
-
-            label_y = max(0, y1 - text_h - 6)
-            draw.rectangle(
-                [x1, label_y, x1 + text_w + 6, label_y + text_h + 6],
-                fill=color_rgb,
-            )
-            draw.text((x1 + 3, label_y + 2), label, fill=(0, 0, 0), font=font)
-
-        if output_path:
-            pil_image.save(output_path)
-
-        return pil_image
+        return render_annotated_image(
+            image_path=image_path,
+            defects=defects,
+            output_path=output_path,
+            opacity=opacity,
+        )

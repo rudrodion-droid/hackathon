@@ -169,12 +169,21 @@ def generate_pdf_report(
 
     # --- Параметры анализа ----------------------------------------------
     story.append(Paragraph("Параметры анализа", styles["H2"]))
+
+    def _fmt_pct(value: Any) -> str:
+        """Форматирует порог как проценты; при ансамбле confidence задаётся
+        отдельно для каждой модели, поэтому значение может быть не числом."""
+        try:
+            return f"{float(value):.0%}"
+        except (TypeError, ValueError):
+            return str(value)
+
     params_table = Table(
         [
-            ["Модель Roboflow", model_id],
-            ["Confidence Threshold", f"{confidence_threshold:.0%}"],
-            ["Overlap Threshold", f"{overlap_threshold:.0%}"],
-            ["Opacity Threshold", f"{opacity_threshold:.0%}"],
+            ["Модель Roboflow", Paragraph(model_id, styles["Body"])],
+            ["Confidence Threshold", _fmt_pct(confidence_threshold)],
+            ["Overlap Threshold", _fmt_pct(overlap_threshold)],
+            ["Opacity Threshold", _fmt_pct(opacity_threshold)],
         ],
         colWidths=[55 * mm, doc.width - 55 * mm],
     )
