@@ -36,6 +36,8 @@ from report import generate_pdf_report
 _DEFAULT_API_KEY = "Z1QEDPvGPkNLNYEDRRN6"
 API_KEY = os.environ.get("ROBOFLOW_API_KEY", _DEFAULT_API_KEY)
 
+DEFAULT_MODEL_ID = "concrete-defect-detection-zuym8/1"
+
 st.set_page_config(
     page_title="Детектор дефектов бетонных конструкций",
     page_icon="🏗️",
@@ -46,95 +48,22 @@ if "analysis_done" not in st.session_state:
     st.session_state["analysis_done"] = False
 
 # ---------------------------------------------------------------------------
-# Оформление
+# Немного оформления — минимально и точечно, чтобы не ломать верстку
+# Streamlit. Основной внешний вид (цвета кнопок, слайдеров, ссылок) задаётся
+# через .streamlit/config.toml, а не через хрупкие CSS-хаки.
 # ---------------------------------------------------------------------------
 st.markdown(
     """
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
-        html, body, [class*="css"]  {
-            font-family: 'Inter', sans-serif;
-        }
-
-        .block-container {
-            padding-top: 1.6rem;
-            max-width: 1180px;
-        }
-
-        /* --- Hero-заголовок ------------------------------------------- */
+        .block-container { padding-top: 2rem; max-width: 1100px; }
         .hero {
-            background: linear-gradient(120deg, #1E3A8A 0%, #2563EB 55%, #3B82F6 100%);
-            border-radius: 18px;
-            padding: 2.1rem 2.4rem;
-            margin-bottom: 1.6rem;
-            box-shadow: 0 10px 30px -12px rgba(37, 99, 235, 0.45);
-        }
-        .hero h1 {
-            color: #FFFFFF;
-            font-weight: 800;
-            font-size: 2rem;
-            margin: 0 0 0.5rem 0;
-        }
-        .hero p {
-            color: #DBEAFE;
-            font-size: 1.02rem;
-            margin: 0;
-            max-width: 720px;
-        }
-
-        /* --- Карточки метрик -------------------------------------------- */
-        div[data-testid="stMetric"] {
-            background: #FFFFFF;
-            border: 1px solid #E2E8F0;
+            background: linear-gradient(120deg, #1E3A8A 0%, #2563EB 100%);
             border-radius: 14px;
-            padding: 0.9rem 1.1rem 0.7rem 1.1rem;
-            box-shadow: 0 4px 14px -8px rgba(15, 23, 42, 0.12);
+            padding: 1.8rem 2rem;
+            margin-bottom: 1.5rem;
         }
-        div[data-testid="stMetricLabel"] {
-            color: #64748B;
-        }
-        div[data-testid="stMetricValue"] {
-            color: #1E3A8A;
-            font-weight: 700;
-        }
-
-        /* --- Кнопки ------------------------------------------------------ */
-        .stButton > button, .stDownloadButton > button {
-            border-radius: 10px;
-            font-weight: 600;
-            border: none;
-        }
-        .stButton > button[kind="primary"], .stButton > button {
-            background: linear-gradient(120deg, #2563EB, #1E3A8A);
-            color: #FFFFFF;
-        }
-        .stButton > button:hover, .stDownloadButton > button:hover {
-            filter: brightness(1.08);
-        }
-
-        /* --- Секции результатов ------------------------------------------ */
-        .section-title {
-            font-size: 1.15rem;
-            font-weight: 700;
-            color: #1E3A8A;
-            margin: 1.6rem 0 0.6rem 0;
-            padding-bottom: 0.35rem;
-            border-bottom: 2px solid #DBEAFE;
-        }
-
-        /* --- Боковая панель ----------------------------------------------- */
-        section[data-testid="stSidebar"] {
-            background: #F8FAFC;
-        }
-        section[data-testid="stSidebar"] h2 {
-            color: #1E3A8A;
-        }
-
-        div[data-testid="stExpander"] {
-            border: 1px solid #E2E8F0;
-            border-radius: 10px;
-        }
+        .hero h1 { color: #FFFFFF; font-size: 1.7rem; margin: 0 0 0.4rem 0; }
+        .hero p { color: #DBEAFE; font-size: 1rem; margin: 0; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -148,56 +77,53 @@ with st.sidebar:
 
     model_id = st.text_input(
         "ID модели Roboflow",
-        value="concrete-crack-detection/1",
-        help="Формат: project-slug/version. Можно заменить на свою обученную модель.",
+        value=DEFAULT_MODEL_ID,
+        help="Формат: project-slug/version. Можно заменить на свою модель.",
     )
 
-    confidence_threshold = st.slider(
-        "Confidence Threshold (порог уверенности)",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.5,
-        step=0.05,
-        help=(
-            "Дефекты с уверенностью модели ниже этого значения не будут "
-            "учитываться. Передаётся напрямую в Roboflow API — как одноимённый "
-            "ползунок в веб-интерфейсе Roboflow."
-        ),
-    )
+    with st.expander("Пороги детекции", expanded=True):
+        confidence_threshold = st.slider(
+            "Confidence Threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.5,
+            step=0.05,
+            help=(
+                "Дефекты с уверенностью модели ниже этого значения не будут "
+                "учитываться. Передаётся напрямую в Roboflow API."
+            ),
+        )
+        overlap_threshold = st.slider(
+            "Overlap Threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.5,
+            step=0.05,
+            help=(
+                "IoU-порог для объединения (NMS) перекрывающихся рамок одного "
+                "дефекта. Меньше значение — агрессивнее схлопывание дублей."
+            ),
+        )
+        opacity_threshold = st.slider(
+            "Opacity Threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.75,
+            step=0.05,
+            help=(
+                "Непрозрачность цветной заливки внутри рамок на итоговом "
+                "изображении. Влияет только на отображение, не на детекцию."
+            ),
+        )
 
-    overlap_threshold = st.slider(
-        "Overlap Threshold (порог перекрытия)",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.5,
-        step=0.05,
-        help=(
-            "IoU-порог для объединения (NMS) перекрывающихся рамок одного и "
-            "того же дефекта. Чем меньше значение, тем агрессивнее "
-            "схлопываются дублирующиеся рамки. Передаётся напрямую в "
-            "Roboflow API — как одноимённый ползунок в веб-интерфейсе Roboflow."
-        ),
-    )
-
-    opacity_threshold = st.slider(
-        "Opacity Threshold (непрозрачность заливки)",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.75,
-        step=0.05,
-        help=(
-            "Непрозрачность цветной заливки внутри рамок на итоговом "
-            "изображении. Влияет только на отображение результатов, не на "
-            "сам поиск дефектов."
-        ),
-    )
-
-    st.markdown("---")
+    st.divider()
     st.caption(
-        "🔒 Подключение к Roboflow уже настроено — вводить API-ключ не нужно. "
-        "Готовую модель детекции дефектов можно найти в "
-        "[Roboflow Universe](https://universe.roboflow.com), либо указать свою "
-        "выше."
+        "🔒 Подключение к Roboflow уже настроено — вводить API-ключ не нужно."
+    )
+    st.caption(
+        "Готовую модель можно найти в "
+        "[Roboflow Universe](https://universe.roboflow.com), либо указать "
+        "свою выше."
     )
 
 # ---------------------------------------------------------------------------
@@ -207,32 +133,33 @@ st.markdown(
     """
     <div class="hero">
         <h1>🏗️ Автоматическое обнаружение дефектов конструкций</h1>
-        <p>Загрузите фотографию бетонной конструкции — сервис автоматически
-        найдёт трещины, сколы, высолы и раковины, используя предобученную
-        ИИ-модель на базе Roboflow Inference API.</p>
+        <p>Загрузите фотографию бетонной конструкции — сервис найдёт трещины,
+        сколы, высолы и раковины с помощью ИИ-модели на базе Roboflow.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-uploaded_file = st.file_uploader(
-    "Загрузите фото конструкции",
-    type=["jpg", "jpeg", "png"],
-)
+upload_col, preview_col = st.columns([2, 1])
 
-if uploaded_file is not None:
-    st.image(uploaded_file, caption="Загруженное изображение", width=400)
+with upload_col:
+    uploaded_file = st.file_uploader(
+        "Загрузите фото конструкции",
+        type=["jpg", "jpeg", "png"],
+    )
+    run_disabled = uploaded_file is None
+    run_button = st.button(
+        "🔍 Запустить анализ",
+        disabled=run_disabled,
+        use_container_width=True,
+        type="primary",
+    )
+    if run_disabled:
+        st.info("Загрузите фотографию конструкции, чтобы начать анализ.")
 
-run_disabled = uploaded_file is None
-run_button = st.button(
-    "🔍 Запустить анализ",
-    disabled=run_disabled,
-    use_container_width=True,
-    type="primary",
-)
-
-if run_disabled:
-    st.info("Загрузите фотографию конструкции, чтобы начать анализ.")
+with preview_col:
+    if uploaded_file is not None:
+        st.image(uploaded_file, caption="Загруженное изображение", use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # Запуск анализа
@@ -307,7 +234,8 @@ if st.session_state.get("analysis_done"):
     results = st.session_state["results"]
     run_params = st.session_state.get("run_params", {})
 
-    st.markdown('<div class="section-title">📊 Результаты анализа</div>', unsafe_allow_html=True)
+    st.divider()
+    st.subheader("📊 Результаты анализа")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -323,14 +251,17 @@ if st.session_state.get("analysis_done"):
     other_count = max(total_defects - cracks_count, 0)
 
     metric_col1, metric_col2, metric_col3 = st.columns(3)
-    metric_col1.metric("Всего дефектов", total_defects)
-    metric_col2.metric("Трещины", cracks_count)
-    metric_col3.metric("Сколы / прочее", other_count)
+    with metric_col1.container(border=True):
+        st.metric("Всего дефектов", total_defects)
+    with metric_col2.container(border=True):
+        st.metric("Трещины", cracks_count)
+    with metric_col3.container(border=True):
+        st.metric("Сколы / прочее", other_count)
 
     if total_defects == 0:
         st.success("✅ Явных дефектов не обнаружено при заданном пороге уверенности.")
     else:
-        st.markdown('<div class="section-title">🔎 Детализация по каждому дефекту</div>', unsafe_allow_html=True)
+        st.subheader("🔎 Детализация по каждому дефекту")
         for i, defect in enumerate(results["defects"], start=1):
             with st.expander(
                 f"Дефект №{i}: {defect['class']} "
@@ -338,7 +269,8 @@ if st.session_state.get("analysis_done"):
             ):
                 st.json(defect)
 
-    st.markdown('<div class="section-title">⬇️ Скачать результаты</div>', unsafe_allow_html=True)
+    st.divider()
+    st.subheader("⬇️ Скачать результаты")
 
     json_payload = {
         "total_defects": results["total_defects"],

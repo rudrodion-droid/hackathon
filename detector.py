@@ -134,7 +134,7 @@ class RoboflowDetector:
     конструкций (трещины, сколы, высолы, раковины и другие дефекты).
     """
 
-    DEFAULT_MODEL_ID = "concrete-crack-detection/1"
+    DEFAULT_MODEL_ID = "concrete-defect-detection-zuym8/1"
     # Актуальный endpoint Roboflow Serverless Hosted API (v2).
     # Старый "https://detect.roboflow.com" с ключом в query-параметре
     # считается устаревшим и может блокироваться на стороне Roboflow.
@@ -187,16 +187,10 @@ class RoboflowDetector:
         """
         Отправляет изображение на анализ в Roboflow API и разбирает ответ.
 
-        Важно: confidence и overlap передаются НЕПОСРЕДСТВЕННО в запрос к
-        Roboflow API (через InferenceConfiguration), точно так же, как это
-        делают ползунки "Confidence Threshold" и "Overlap Threshold" в
-        веб-интерфейсе Roboflow. Раньше приложение фильтровало предсказания
-        по confidence только на своей стороне уже ПОСЛЕ инференса, а overlap
-        (IoU-порог для NMS, объединения перекрывающихся рамок) вообще не
-        передавался — из-за этого сервер использовал собственные значения по
-        умолчанию, которые могут заметно отличаться от того, что подобрано
-        вручную на сайте Roboflow, и качество/количество детекций сильно
-        отличалось от результатов там.
+        confidence и overlap передаются НЕПОСРЕДСТВЕННО в запрос к Roboflow
+        API (через InferenceConfiguration), точно так же, как это делают
+        ползунки "Confidence Threshold" и "Overlap Threshold" в веб-интерфейсе
+        Roboflow.
 
         Args:
             image_path: Путь к файлу изображения на диске.
