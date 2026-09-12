@@ -41,7 +41,7 @@ class ModelSpec:
     # которых нет отдельного специалиста. Непустое множество — модель
     # учитывается только по перечисленным русским названиям классов.
     responsible_classes: Optional[Set[str]] = None
-    confidence: float = 0.5
+    confidence: float = 0.0
     enabled: bool = True
 
 
@@ -56,25 +56,25 @@ DEFAULT_REGISTRY: List[ModelSpec] = [
         name="Трещины",
         model_id="concrete-crack-dfd3i/3",
         responsible_classes={"Трещина"},
-        confidence=0.5,
+        confidence=0.0,
     ),
     ModelSpec(
         name="Сколы",
         model_id="cracks-and-spalling-800-img/2",
         responsible_classes={"Скол"},
-        confidence=0.5,
+        confidence=0.0,
     ),
     ModelSpec(
         name="Высолы",
         model_id="efflorescence-hsa7w/1",
         responsible_classes={"Высол"},
-        confidence=0.5,
+        confidence=0.0,
     ),
     ModelSpec(
         name="Общая модель (запасная)",
         model_id="concrete-defect-detection-zuym8/1",
         responsible_classes=None,
-        confidence=0.5,
+        confidence=0.0,
     ),
 ]
 

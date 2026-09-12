@@ -155,7 +155,7 @@ with st.sidebar:
                 "Confidence Threshold",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.5,
+                value=0.0,
                 step=0.05,
                 help=(
                     "Дефекты с уверенностью модели ниже этого значения не будут "

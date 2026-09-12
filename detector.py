@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
@@ -47,7 +48,16 @@ CLASS_COLOR_RGB: Dict[str, Tuple[int, int, int]] = {
 DEFAULT_COLOR_RGB: Tuple[int, int, int] = (230, 230, 230)  # серый — для неизвестного класса
 
 # Возможные пути к TTF-шрифтам с поддержкой кириллицы (для подписей на фото).
+#
+# Первым в списке — шрифт, встроенный прямо в репозиторий (fonts/). Именно
+# он и находится на практике: у Railway/Docker (python:3.12-slim) нет
+# системных TTF-шрифтов, поэтому все системные пути ниже почти никогда не
+# срабатывают, а ImageFont.load_default() (бэкап Pillow) кириллицу не
+# рисует вообще — отсюда пустые прямоугольники вместо подписей на фото.
+# Системные пути оставлены как дополнительный бэкап для локальной разработки.
+_BUNDLED_FONT_BOLD = str(Path(__file__).resolve().parent / "fonts" / "DejaVuSans-Bold.ttf")
 _FONT_CANDIDATES: List[str] = [
+    _BUNDLED_FONT_BOLD,
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/Library/Fonts/Arial.ttf",

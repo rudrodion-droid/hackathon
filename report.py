@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict
 
 from PIL import Image as PILImage
@@ -17,6 +18,8 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     Image as RLImage,
     PageBreak,
@@ -26,6 +29,55 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+
+# ---------------------------------------------------------------------------
+# Шрифт с поддержкой кириллицы.
+#
+# Встроенные PDF-шрифты reportlab (Helvetica и т.п.) не содержат кириллических
+# глифов — любой русский текст ими рисуется как пустые квадраты ("тофу").
+# Чтобы отчёт не зависел от того, какие шрифты установлены на сервере
+# деплоя (Railway/Docker их не ставит), в репозиторий добавлен файл шрифта
+# DejaVu Sans (fonts/DejaVuSans.ttf, fonts/DejaVuSans-Bold.ttf) — он
+# встраивается прямо в PDF при генерации.
+# ---------------------------------------------------------------------------
+_FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+FONT_REGULAR = "DejaVuSans"
+FONT_BOLD = "DejaVuSans-Bold"
+
+
+def _register_fonts() -> None:
+    """Регистрирует встроенный шрифт с поддержкой кириллицы в reportlab.
+
+    Если файлы шрифта по какой-то причине отсутствуют (например, при
+    локальном запуске не из корня репозитория), молча откатываемся на
+    стандартный Helvetica — отчёт всё равно сформируется, просто кириллица
+    в нём снова будет нечитаемой. Это сознательный компромисс: лучше
+    показать отчёт с проблемой шрифта, чем не показать отчёт вообще.
+    """
+    global FONT_REGULAR, FONT_BOLD
+
+    regular_path = _FONTS_DIR / "DejaVuSans.ttf"
+    bold_path = _FONTS_DIR / "DejaVuSans-Bold.ttf"
+
+    if not (regular_path.is_file() and bold_path.is_file()):
+        FONT_REGULAR = "Helvetica"
+        FONT_BOLD = "Helvetica-Bold"
+        return
+
+    pdfmetrics.registerFont(TTFont("DejaVuSans", str(regular_path)))
+    pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", str(bold_path)))
+    # Регистрация "семейства" нужна, чтобы теги <b>...</b> внутри Paragraph
+    # переключались на жирный DejaVuSans-Bold, а не на жирный Helvetica.
+    pdfmetrics.registerFontFamily(
+        "DejaVuSans",
+        normal="DejaVuSans",
+        bold="DejaVuSans-Bold",
+        italic="DejaVuSans",
+        boldItalic="DejaVuSans-Bold",
+    )
+
+
+_register_fonts()
 
 # Единая цветовая палитра отчёта (согласована с интерфейсом приложения).
 COLOR_PRIMARY = colors.HexColor("#2563EB")
@@ -66,6 +118,7 @@ def _build_styles() -> Dict[str, ParagraphStyle]:
     styles["Title"] = ParagraphStyle(
         "ReportTitle",
         parent=base["Title"],
+        fontName=FONT_BOLD,
         fontSize=20,
         leading=24,
         textColor=COLOR_PRIMARY_DARK,
@@ -74,6 +127,7 @@ def _build_styles() -> Dict[str, ParagraphStyle]:
     styles["Subtitle"] = ParagraphStyle(
         "ReportSubtitle",
         parent=base["Normal"],
+        fontName=FONT_REGULAR,
         fontSize=10.5,
         textColor=COLOR_MUTED,
         spaceAfter=14,
@@ -81,6 +135,7 @@ def _build_styles() -> Dict[str, ParagraphStyle]:
     styles["H2"] = ParagraphStyle(
         "ReportH2",
         parent=base["Heading2"],
+        fontName=FONT_BOLD,
         fontSize=13,
         textColor=COLOR_PRIMARY_DARK,
         spaceBefore=14,
@@ -89,6 +144,7 @@ def _build_styles() -> Dict[str, ParagraphStyle]:
     styles["Body"] = ParagraphStyle(
         "ReportBody",
         parent=base["Normal"],
+        fontName=FONT_REGULAR,
         fontSize=9.5,
         leading=13,
         textColor=COLOR_TEXT,
@@ -96,6 +152,7 @@ def _build_styles() -> Dict[str, ParagraphStyle]:
     styles["Caption"] = ParagraphStyle(
         "ReportCaption",
         parent=base["Normal"],
+        fontName=FONT_REGULAR,
         fontSize=8.5,
         textColor=COLOR_MUTED,
         alignment=1,  # center
@@ -104,6 +161,7 @@ def _build_styles() -> Dict[str, ParagraphStyle]:
     styles["Footer"] = ParagraphStyle(
         "ReportFooter",
         parent=base["Normal"],
+        fontName=FONT_REGULAR,
         fontSize=7.5,
         textColor=COLOR_MUTED,
     )
@@ -194,7 +252,8 @@ def generate_pdf_report(
                 ("TEXTCOLOR", (0, 0), (0, -1), COLOR_MUTED),
                 ("TEXTCOLOR", (1, 0), (1, -1), COLOR_TEXT),
                 ("FONTSIZE", (0, 0), (-1, -1), 9.5),
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTNAME", (0, 0), (-1, -1), FONT_REGULAR),
+                ("FONTNAME", (0, 0), (0, -1), FONT_BOLD),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
                 ("TOPPADDING", (0, 0), (-1, -1), 6),
                 ("LEFTPADDING", (0, 0), (-1, -1), 8),
@@ -306,7 +365,8 @@ def generate_pdf_report(
         table_style = [
             ("BACKGROUND", (0, 0), (-1, 0), COLOR_PRIMARY),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 0), (-1, -1), FONT_REGULAR),
+            ("FONTNAME", (0, 0), (-1, 0), FONT_BOLD),
             ("FONTSIZE", (0, 0), (-1, -1), 8.5),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
