@@ -178,13 +178,33 @@ class RoboflowDetector:
         key = class_name_en.strip().lower()
         return CLASS_NAME_RU.get(key, class_name_en.capitalize())
 
-    def detect(self, image_path: str, confidence: float = 0.5) -> Dict[str, Any]:
+    def detect(
+        self,
+        image_path: str,
+        confidence: float = 0.5,
+        overlap: float = 0.5,
+    ) -> Dict[str, Any]:
         """
         Отправляет изображение на анализ в Roboflow API и разбирает ответ.
 
+        Важно: confidence и overlap передаются НЕПОСРЕДСТВЕННО в запрос к
+        Roboflow API (через InferenceConfiguration), точно так же, как это
+        делают ползунки "Confidence Threshold" и "Overlap Threshold" в
+        веб-интерфейсе Roboflow. Раньше приложение фильтровало предсказания
+        по confidence только на своей стороне уже ПОСЛЕ инференса, а overlap
+        (IoU-порог для NMS, объединения перекрывающихся рамок) вообще не
+        передавался — из-за этого сервер использовал собственные значения по
+        умолчанию, которые могут заметно отличаться от того, что подобрано
+        вручную на сайте Roboflow, и качество/количество детекций сильно
+        отличалось от результатов там.
+
         Args:
             image_path: Путь к файлу изображения на диске.
-            confidence: Порог уверенности (0.0-1.0) для отбора предсказаний.
+            confidence: Порог уверенности (0.0-1.0) — аналог "Confidence
+                Threshold" на Roboflow.
+            overlap: Порог перекрытия/IoU для NMS (0.0-1.0) — аналог
+                "Overlap Threshold" на Roboflow. Более низкое значение
+                агрессивнее схлопывает дублирующиеся перекрывающиеся рамки.
 
         Returns:
             Словарь вида:
@@ -204,8 +224,15 @@ class RoboflowDetector:
         if not os.path.isfile(image_path):
             raise RoboflowDetectorError(f"Файл изображения не найден: {image_path}")
 
+        request_configuration = InferenceConfiguration(
+            api_key_transport="header",
+            confidence_threshold=confidence,
+            iou_threshold=overlap,
+        )
+
         try:
-            raw_response = self.client.infer(image_path, model_id=self.model_id)
+            with self.client.use_configuration(request_configuration):
+                raw_response = self.client.infer(image_path, model_id=self.model_id)
         except Exception as exc:
             message = str(exc).lower()
             if any(term in message for term in ("unauthorized", "401", "invalid api key", "forbidden")):
@@ -263,6 +290,7 @@ class RoboflowDetector:
         image_path: str,
         results: Dict[str, Any],
         output_path: Optional[str] = None,
+        opacity: float = 0.75,
     ) -> Image.Image:
         """
         Отрисовывает bounding box'ы найденных дефектов поверх исходного изображения.
@@ -276,6 +304,9 @@ class RoboflowDetector:
             image_path: Путь к исходному изображению.
             results: Результат, возвращённый методом detect().
             output_path: Если указан, итоговое изображение сохраняется по этому пути.
+            opacity: Непрозрачность заливки внутри рамок (0.0-1.0) — аналог
+                "Opacity Threshold" на Roboflow. Влияет только на отображение,
+                на сами предсказания не влияет.
 
         Returns:
             Изображение в формате Pillow (RGB) с отрисованными дефектами.
@@ -291,15 +322,34 @@ class RoboflowDetector:
             ) from exc
 
         defects: List[DetectionResult] = results.get("_defect_objects", [])
-        draw = ImageDraw.Draw(pil_image)
         font = _load_font(size=16)
+
+        # Полупрозрачная заливка рисуется на отдельном RGBA-слое и затем
+        # накладывается на исходное изображение — так можно регулировать
+        # непрозрачность (opacity), не теряя резкость обводки и подписей.
+        opacity = max(0.0, min(1.0, opacity))
+        fill_alpha = int(round(opacity * 255))
+        overlay = Image.new("RGBA", pil_image.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+
+        for defect in defects:
+            x1, y1, x2, y2 = defect.to_bbox_xyxy()
+            color_rgb = CLASS_COLOR_RGB.get(defect.class_name_ru, DEFAULT_COLOR_RGB)
+            overlay_draw.rectangle(
+                [x1, y1, x2, y2], fill=(*color_rgb, fill_alpha)
+            )
+
+        pil_image = Image.alpha_composite(
+            pil_image.convert("RGBA"), overlay
+        ).convert("RGB")
+        draw = ImageDraw.Draw(pil_image)
 
         for defect in defects:
             x1, y1, x2, y2 = defect.to_bbox_xyxy()
             color_rgb = CLASS_COLOR_RGB.get(defect.class_name_ru, DEFAULT_COLOR_RGB)
             label = f"{defect.class_name_ru} {defect.confidence:.0%}"
 
-            # Рамка вокруг дефекта.
+            # Рамка вокруг дефекта (поверх полупрозрачной заливки).
             draw.rectangle([x1, y1, x2, y2], outline=color_rgb, width=2)
 
             # Подпись с фоном-плашкой поверх верхней границы рамки.

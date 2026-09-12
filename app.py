@@ -51,12 +51,43 @@ with st.sidebar:
     )
 
     confidence_threshold = st.slider(
-        "Порог уверенности (confidence)",
+        "Confidence Threshold (порог уверенности)",
         min_value=0.0,
         max_value=1.0,
         value=0.5,
         step=0.05,
-        help="Дефекты с уверенностью модели ниже этого значения не будут учитываться.",
+        help=(
+            "Дефекты с уверенностью модели ниже этого значения не будут "
+            "учитываться. Передаётся напрямую в Roboflow API — как одноимённый "
+            "ползунок в веб-интерфейсе Roboflow."
+        ),
+    )
+
+    overlap_threshold = st.slider(
+        "Overlap Threshold (порог перекрытия)",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.5,
+        step=0.05,
+        help=(
+            "IoU-порог для объединения (NMS) перекрывающихся рамок одного и "
+            "того же дефекта. Чем меньше значение, тем агрессивнее "
+            "схлопываются дублирующиеся рамки. Передаётся напрямую в "
+            "Roboflow API — как одноимённый ползунок в веб-интерфейсе Roboflow."
+        ),
+    )
+
+    opacity_threshold = st.slider(
+        "Opacity Threshold (непрозрачность заливки)",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.75,
+        step=0.05,
+        help=(
+            "Непрозрачность цветной заливки внутри рамок на итоговом "
+            "изображении. Влияет только на отображение результатов, не на "
+            "сам поиск дефектов."
+        ),
     )
 
     st.markdown("---")
@@ -117,10 +148,15 @@ if run_button and uploaded_file is not None and api_key:
 
                 detector = RoboflowDetector(api_key=api_key, model_id=model_id)
                 results: Dict[str, Any] = detector.detect(
-                    image_path=input_path, confidence=confidence_threshold
+                    image_path=input_path,
+                    confidence=confidence_threshold,
+                    overlap=overlap_threshold,
                 )
                 annotated_image = detector.visualize(
-                    image_path=input_path, results=results, output_path=output_path
+                    image_path=input_path,
+                    results=results,
+                    output_path=output_path,
+                    opacity=opacity_threshold,
                 )
 
                 # Изображения загружаются в память как объекты Pillow, а не как
