@@ -5,9 +5,16 @@ FROM python:3.12-slim
 # Без них при импорте cv2 падает: "ImportError: libGL.so.1: cannot open
 # shared object file". Ставим их явно через apt-get — так надёжнее, чем
 # пытаться подобрать нужные пакеты через Nixpacks.
+#
+# fonts-dejavu-core устанавливает DejaVuSans(.ttf)/DejaVuSans-Bold.ttf в
+# /usr/share/fonts/truetype/dejavu/ — образ python:3.12-slim без него не
+# содержит ни одного TTF-шрифта с кириллицей. Без этого пакета и без
+# шрифта, закоммиченного в fonts/ (см. detector.py и report.py),
+# reportlab/Pillow рисуют русский текст квадратами ("тофу").
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

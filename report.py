@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from PIL import Image as PILImage
 from reportlab.lib import colors
@@ -34,32 +34,58 @@ from reportlab.platypus import (
 # Шрифт с поддержкой кириллицы.
 #
 # Встроенные PDF-шрифты reportlab (Helvetica и т.п.) не содержат кириллических
-# глифов — любой русский текст ими рисуется как пустые квадраты ("тофу").
-# Чтобы отчёт не зависел от того, какие шрифты установлены на сервере
-# деплоя (Railway/Docker их не ставит), в репозиторий добавлен файл шрифта
-# DejaVu Sans (fonts/DejaVuSans.ttf, fonts/DejaVuSans-Bold.ttf) — он
-# встраивается прямо в PDF при генерации.
+# глифов — любой русский текст ими рисуется как пустые прямоугольники
+# ("тофу"; в самом PDF-отчёте они обычно выглядят синими, потому что
+# заголовки и подписи в отчёте покрашены в синий/тёмно-синий цвет темы).
+#
+# Раньше здесь проверялся только один путь — fonts/DejaVuSans.ttf в
+# репозитории, и при его отсутствии сразу происходил откат на Helvetica.
+# Именно это и вызывало проблему: файлы шрифта не были закоммичены в
+# репозиторий, поэтому COPY . . в Dockerfile просто нечего было копировать.
+# Теперь, как и в detector.py, проверяется несколько путей — сначала
+# репозиторий (fonts/), затем системный пакет fonts-dejavu-core, который
+# ставится в Dockerfile (см. apt-get install) и всегда присутствует в
+# образе для деплоя, даже если шрифт не закоммичен в git.
 # ---------------------------------------------------------------------------
 _FONTS_DIR = Path(__file__).resolve().parent / "fonts"
+
+_REGULAR_CANDIDATES = [
+    _FONTS_DIR / "DejaVuSans.ttf",
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+]
+_BOLD_CANDIDATES = [
+    _FONTS_DIR / "DejaVuSans-Bold.ttf",
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+]
+
 FONT_REGULAR = "DejaVuSans"
 FONT_BOLD = "DejaVuSans-Bold"
 
 
-def _register_fonts() -> None:
-    """Регистрирует встроенный шрифт с поддержкой кириллицы в reportlab.
+def _first_existing(paths: List[Path]) -> Path | None:
+    for path in paths:
+        if path.is_file():
+            return path
+    return None
 
-    Если файлы шрифта по какой-то причине отсутствуют (например, при
-    локальном запуске не из корня репозитория), молча откатываемся на
-    стандартный Helvetica — отчёт всё равно сформируется, просто кириллица
-    в нём снова будет нечитаемой. Это сознательный компромисс: лучше
-    показать отчёт с проблемой шрифта, чем не показать отчёт вообще.
+
+def _register_fonts() -> None:
+    """Регистрирует шрифт с поддержкой кириллицы в reportlab.
+
+    Перебирает несколько возможных расположений TTF-файла (репозиторий,
+    затем системный путь пакета fonts-dejavu-core). Если ни один из них не
+    найден (например, локальный запуск на машине без этого пакета и без
+    закоммиченного шрифта), молча откатываемся на стандартный Helvetica —
+    отчёт всё равно сформируется, просто кириллица в нём снова будет
+    нечитаемой. Это сознательный компромисс: лучше показать отчёт с
+    проблемой шрифта, чем не показать отчёт вообще.
     """
     global FONT_REGULAR, FONT_BOLD
 
-    regular_path = _FONTS_DIR / "DejaVuSans.ttf"
-    bold_path = _FONTS_DIR / "DejaVuSans-Bold.ttf"
+    regular_path = _first_existing(_REGULAR_CANDIDATES)
+    bold_path = _first_existing(_BOLD_CANDIDATES)
 
-    if not (regular_path.is_file() and bold_path.is_file()):
+    if regular_path is None or bold_path is None:
         FONT_REGULAR = "Helvetica"
         FONT_BOLD = "Helvetica-Bold"
         return
