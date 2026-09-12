@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import streamlit as st
+from PIL import Image
 
 from detector import (
     RoboflowAuthError,
@@ -122,8 +123,15 @@ if run_button and uploaded_file is not None and api_key:
                     image_path=input_path, results=results, output_path=output_path
                 )
 
+                # Изображения загружаются в память как объекты Pillow, а не как
+                # пути к файлам: временная папка удаляется сразу по выходу из
+                # блока "with", поэтому пути на диск станут недействительны ещё
+                # до отображения результатов ниже.
+                original_image = Image.open(input_path).convert("RGB")
+                original_image.load()
+
                 st.session_state["results"] = results
-                st.session_state["original_image_path"] = input_path
+                st.session_state["original_image"] = original_image
                 st.session_state["annotated_image"] = annotated_image.copy()
                 st.session_state["analysis_done"] = True
 
@@ -156,7 +164,7 @@ if st.session_state.get("analysis_done"):
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Исходное изображение**")
-        st.image(st.session_state["original_image_path"], use_container_width=True)
+        st.image(st.session_state["original_image"], use_container_width=True)
     with col2:
         st.markdown("**Обнаруженные дефекты**")
         st.image(st.session_state["annotated_image"], use_container_width=True)
