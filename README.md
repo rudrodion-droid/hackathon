@@ -7,9 +7,9 @@
 
 ## 📦 Стек технологий
 
-- Python 3.10+
+- Python 3.10+ (для деплоя — 3.12, см. `Dockerfile`)
 - Streamlit — веб-интерфейс
-- OpenCV, Pillow, NumPy — обработка и отрисовка изображений
+- Pillow — отрисовка bounding box'ов и подписей на изображении
 - Roboflow Inference SDK — обращение к готовой модели детекции
 
 ## 📁 Структура проекта
@@ -19,20 +19,21 @@
 ├── app.py               # Streamlit-приложение (UI)
 ├── detector.py           # Класс RoboflowDetector — логика API и визуализация
 ├── requirements.txt      # Зависимости проекта
-├── Procfile              # Команда запуска для Railway
-├── .python-version       # Фиксация версии Python для Railway
+├── Dockerfile             # Образ для деплоя на Railway
+├── Procfile              # Резервный способ запуска (используется, если Dockerfile отсутствует)
+├── .python-version       # Версия Python для локальной разработки
 ├── .gitignore            # Исключения для git (venv, кэш и т.п.)
 └── README.md             # Эта инструкция
 ```
 
-## 🚀 Установка и запуск
+## 🚀 Локальная установка и запуск
 
 ### 1. Клонируйте/скопируйте файлы проекта в отдельную папку
 
 ```bash
 mkdir defect-detector-mvp
 cd defect-detector-mvp
-# поместите сюда app.py, detector.py, requirements.txt
+# поместите сюда все файлы проекта
 ```
 
 ### 2. Создайте и активируйте виртуальное окружение
@@ -46,7 +47,7 @@ source venv/bin/activate
 **Windows (PowerShell):**
 ```powershell
 python -m venv venv
-venv\Scripts\Activate.ps1
+.\venv\Scripts\Activate.ps1
 ```
 
 ### 3. Установите зависимости
@@ -93,8 +94,12 @@ streamlit run app.py
 
 ## ☁️ Деплой на Railway
 
-Проект уже содержит `Procfile`, поэтому деплой не требует ручной настройки
-команды запуска.
+Проект деплоится через `Dockerfile` — Railway автоматически обнаруживает
+его в корне репозитория и использует вместо стандартной сборки Nixpacks.
+Это сделано намеренно: библиотека `inference-sdk` тянет за собой
+`opencv-python`, которому нужны системные библиотеки (`libgl1`,
+`libglib2.0-0`), а через Nixpacks их поставить надёжно не получается —
+`Dockerfile` даёт полный контроль над установкой через `apt-get`.
 
 ### 1. Подготовьте репозиторий
 
@@ -105,7 +110,9 @@ streamlit run app.py
 app.py
 detector.py
 requirements.txt
+Dockerfile
 Procfile
+.python-version
 .gitignore
 README.md
 ```
@@ -125,14 +132,18 @@ git push -u origin main
 
 1. Зайдите на [railway.app](https://railway.app) и войдите (можно через GitHub).
 2. Нажмите **New Project → Deploy from GitHub repo** и выберите этот репозиторий.
-3. Railway автоматически определит Python-проект, установит зависимости из
-   `requirements.txt` и запустит команду из `Procfile`.
+3. Railway увидит `Dockerfile` в корне и автоматически соберёт проект по
+   нему (builder переключится на "Dockerfile" — это видно в Settings →
+   Build). Дополнительно ничего настраивать не нужно.
 
-### 3. Проверьте переменную порта
+### 3. Сгенерируйте публичный домен
 
-`Procfile` уже использует переменную окружения `$PORT`, которую Railway
-подставляет автоматически (`--server.port $PORT --server.address 0.0.0.0`).
-Менять эту команду вручную не нужно.
+Railway не создаёт публичный URL автоматически:
+
+1. Откройте сервис → вкладка **Settings** → раздел **Networking**.
+2. Нажмите **Generate Domain**.
+3. Появится ссылка вида `https://<ваш-проект>.up.railway.app` — откройте её
+   в браузере (первая загрузка может занять несколько секунд).
 
 ### 4. (Опционально) API-ключ Roboflow как переменная окружения
 
@@ -145,23 +156,21 @@ git push -u origin main
 2. Ключ Roboflow **не должен** попадать в код или в git — используйте
    только переменные окружения.
 
-### 5. Откройте приложение
+### Известные проблемы при деплое и их решения
 
-После завершения деплоя Railway выдаст публичный URL вида
-`https://<ваш-проект>.up.railway.app` — приложение будет доступно по нему.
+**"No matching distribution found for inference-sdk"**
+Возникает, если сборка идёт на слишком новой версии Python (например 3.13),
+которую `inference-sdk` ещё не поддерживает. `Dockerfile` фиксирует
+`python:3.12-slim`, поэтому при сборке через Docker эта проблема не
+возникает. Файл `.python-version` (`3.12`) дополнительно полезен для
+локальной разработки и на случай сборки без Dockerfile.
 
-### Частая проблема: "No matching distribution found for inference-sdk"
-
-Railway по умолчанию может собирать проект на самой новой версии Python
-(например 3.13), а пакет `inference-sdk` пока не поддерживает такие
-новые версии. В репозитории уже есть файл `.python-version` с
-зафиксированной версией `3.12`, который Railway (Nixpacks/Railpack)
-использует автоматически. Если ошибка всё равно возникает:
-
-1. Убедитесь, что файл `.python-version` действительно попал в git-репозиторий
-   (`git status` / `git ls-files` должны его показывать).
-2. Запустите передеплой в Railway (Redeploy) после пуша этого файла.
-3. Как альтернатива — можно также добавить файл `runtime.txt` с содержимым
-   `python-3.12.x`.
-
-
+**"ImportError: libGL.so.1: cannot open shared object file"**
+Возникает при импорте `cv2` — эту библиотеку транзитивно тянет
+`inference-sdk` (зависимость `opencv-python`), и ей нужны системные
+библиотеки `libgl1`/`libglib2.0-0`, которых нет в минимальном окружении
+сборки. `Dockerfile` устанавливает их явно через `apt-get install
+libgl1 libglib2.0-0` — при сборке через Docker эта ошибка не должна
+появляться. Если вы видите её снова, убедитесь, что Railway действительно
+использует `Dockerfile` (Settings → Build → Builder должен быть
+"Dockerfile", а не "Nixpacks"), и что файл `Dockerfile` попал в git.

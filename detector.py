@@ -3,7 +3,7 @@ detector.py
 
 Модуль для работы с Roboflow Inference API: отправка изображений на
 детекцию дефектов бетонных конструкций, разбор результатов и
-визуализация bounding box'ов поверх исходного фото.
+визуализация bounding box'ов поверх исходного фото (через Pillow).
 """
 
 from __future__ import annotations
@@ -12,8 +12,6 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 try:
@@ -269,9 +267,10 @@ class RoboflowDetector:
         """
         Отрисовывает bounding box'ы найденных дефектов поверх исходного изображения.
 
-        Рамки рисуются через OpenCV, а подписи (на русском языке) — через
-        Pillow с TTF-шрифтом, так как стандартные шрифты OpenCV не
-        поддерживают кириллицу.
+        Вся отрисовка (рамки и подписи на русском языке) выполняется через
+        Pillow — без OpenCV, чтобы не зависеть от системных библиотек вроде
+        libGL, которых часто нет на минимальных серверных окружениях
+        (например, Railway).
 
         Args:
             image_path: Путь к исходному изображению.
@@ -284,36 +283,26 @@ class RoboflowDetector:
         Raises:
             RoboflowDetectorError: если изображение не удалось прочитать.
         """
-        cv_image = cv2.imread(image_path)
-        if cv_image is None:
-            try:
-                pil_source = Image.open(image_path).convert("RGB")
-                cv_image = cv2.cvtColor(np.array(pil_source), cv2.COLOR_RGB2BGR)
-            except Exception as exc:
-                raise RoboflowDetectorError(
-                    f"Не удалось прочитать изображение для визуализации: {exc}"
-                ) from exc
+        try:
+            pil_image = Image.open(image_path).convert("RGB")
+        except Exception as exc:
+            raise RoboflowDetectorError(
+                f"Не удалось прочитать изображение для визуализации: {exc}"
+            ) from exc
 
         defects: List[DetectionResult] = results.get("_defect_objects", [])
-
-        # 1) Рисуем прямоугольники через OpenCV (BGR).
-        for defect in defects:
-            x1, y1, x2, y2 = defect.to_bbox_xyxy()
-            r, g, b = CLASS_COLOR_RGB.get(defect.class_name_ru, DEFAULT_COLOR_RGB)
-            color_bgr = (b, g, r)
-            cv2.rectangle(cv_image, (x1, y1), (x2, y2), color_bgr, 2)
-
-        # 2) Переводим изображение в Pillow (RGB) и рисуем подписи на кириллице.
-        rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb_image)
         draw = ImageDraw.Draw(pil_image)
         font = _load_font(size=16)
 
         for defect in defects:
-            x1, y1, _, _ = defect.to_bbox_xyxy()
+            x1, y1, x2, y2 = defect.to_bbox_xyxy()
             color_rgb = CLASS_COLOR_RGB.get(defect.class_name_ru, DEFAULT_COLOR_RGB)
             label = f"{defect.class_name_ru} {defect.confidence:.0%}"
 
+            # Рамка вокруг дефекта.
+            draw.rectangle([x1, y1, x2, y2], outline=color_rgb, width=2)
+
+            # Подпись с фоном-плашкой поверх верхней границы рамки.
             text_bbox = draw.textbbox((0, 0), label, font=font)
             text_w = text_bbox[2] - text_bbox[0]
             text_h = text_bbox[3] - text_bbox[1]
