@@ -20,6 +20,7 @@
 ├── detector.py           # Класс RoboflowDetector — логика API и визуализация
 ├── requirements.txt      # Зависимости проекта
 ├── Procfile              # Команда запуска для Railway
+├── .python-version       # Фиксация версии Python для Railway
 ├── .gitignore            # Исключения для git (venv, кэш и т.п.)
 └── README.md             # Эта инструкция
 ```
@@ -148,4 +149,19 @@ git push -u origin main
 
 После завершения деплоя Railway выдаст публичный URL вида
 `https://<ваш-проект>.up.railway.app` — приложение будет доступно по нему.
+
+### Частая проблема: "No matching distribution found for inference-sdk"
+
+Railway по умолчанию может собирать проект на самой новой версии Python
+(например 3.13), а пакет `inference-sdk` пока не поддерживает такие
+новые версии. В репозитории уже есть файл `.python-version` с
+зафиксированной версией `3.12`, который Railway (Nixpacks/Railpack)
+использует автоматически. Если ошибка всё равно возникает:
+
+1. Убедитесь, что файл `.python-version` действительно попал в git-репозиторий
+   (`git status` / `git ls-files` должны его показывать).
+2. Запустите передеплой в Railway (Redeploy) после пуша этого файла.
+3. Как альтернатива — можно также добавить файл `runtime.txt` с содержимым
+   `python-3.12.x`.
+
 
